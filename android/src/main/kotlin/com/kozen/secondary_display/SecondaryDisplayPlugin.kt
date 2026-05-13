@@ -36,7 +36,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private var customWallpaperLogoPath: String? = null
     private var customGifPath: String? = null
 
-    // ─── FlutterPlugin ────────────────────────────────────────────────────────
+    private var lifecycleCallbacks: android.app.Application.ActivityLifecycleCallbacks? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -44,11 +44,30 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
         channel = MethodChannel(binding.binaryMessenger, channelName)
         channel.setMethodCallHandler(this)
         initSDK()
+        
+        lifecycleCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
+            override fun onActivityStarted(activity: android.app.Activity) {}
+            override fun onActivityResumed(activity: android.app.Activity) {}
+            override fun onActivityPaused(activity: android.app.Activity) {}
+            override fun onActivityStopped(activity: android.app.Activity) {
+                Log.d(tag, "Activity stopped (App backgrounded/exiting). Showing wallpaper.")
+                uiManager.showWallpaper(customWallpaperLogoPath) {}
+            }
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        }
+        (context as? android.app.Application)?.registerActivityLifecycleCallbacks(lifecycleCallbacks)
+        
         Log.d(tag, "SecondaryDisplayPlugin attached")
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        lifecycleCallbacks?.let {
+            (context as? android.app.Application)?.unregisterActivityLifecycleCallbacks(it)
+        }
+        lifecycleCallbacks = null
         Log.d(tag, "SecondaryDisplayPlugin detached")
     }
 
