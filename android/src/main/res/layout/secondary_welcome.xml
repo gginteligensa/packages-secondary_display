@@ -1,10 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@drawable/app_gradient"
-    android:padding="20dp">
+    android:layout_height="match_parent">
 
+    <!-- Imagen de fondo que ocupa toda la pantalla -->
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/welcome_bg"
+        android:scaleType="centerCrop"
+        android:contentDescription="Welcome background" />
+
+    <!-- Overlay degradado para legibilidad -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/app_gradient"
+        android:alpha="0.55" />
+
+    <!-- Logo centrado -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -12,24 +26,34 @@
         android:gravity="center"
         android:orientation="vertical">
 
+        <ImageView
+            android:layout_width="120dp"
+            android:layout_height="48dp"
+            android:src="@drawable/platco_logo"
+            android:scaleType="fitCenter"
+            android:contentDescription="Logo" />
+
         <TextView
             android:id="@+id/welcome_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
             android:text="BIENVENIDO"
             android:textColor="#FFFFFF"
-            android:textSize="24sp"
+            android:textSize="22sp"
             android:textStyle="bold"
             android:letterSpacing="0.05" />
     </LinearLayout>
 
+    <!-- Powered by - pie de página -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
         android:layout_alignParentEnd="true"
+        android:layout_margin="8dp"
         android:text="Powered by Inteligensa"
-        android:textColor="#80FFFFFF"
+        android:textColor="#AAFFFFFF"
         android:textSize="10sp"
         android:textStyle="italic" />
 
