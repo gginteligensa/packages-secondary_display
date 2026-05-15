@@ -2,6 +2,10 @@ package com.kozen.secondary_display
 
 import android.content.Context
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
+import android.hardware.display.DisplayManager
+import android.view.Display
 import com.kozen.component_client.ComponentEngine
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
@@ -36,6 +40,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private var customWallpaperLogoPath: String? = null
     private var customGifPath: String? = null
 
+    private var presentation: KozenPresentation? = null
     private var lifecycleCallbacks: android.app.Application.ActivityLifecycleCallbacks? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -43,7 +48,11 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
         uiManager = ScreenUIManager(context)
         channel = MethodChannel(binding.binaryMessenger, channelName)
         channel.setMethodCallHandler(this)
-        initSDK()
+        
+        // ⚠️ SDK init is now LAZY - only on explicit 'initialize' call from Flutter.
+        // This ensures the card reader hardware bus is free at startup.
+        
+        setupPresentation()
         
         lifecycleCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
@@ -71,36 +80,83 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
         Log.d(tag, "SecondaryDisplayPlugin detached")
     }
 
-    // ─── SDK init ─────────────────────────────────────────────────────────────
+    // ─── Presentation Setup ──────────────────────────────────────────────────
+    
+    private fun setupPresentation() {
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        
+        // We will call this periodically or after SDK init
+        Handler(Looper.getMainLooper()).postDelayed({
+            val allDisplays = dm.displays
+            Log.d(tag, "--- Available Displays after delay (${allDisplays.size}) ---")
+            for (d in allDisplays) {
+                Log.d(tag, "Display: ID=${d.displayId}, Name=${d.name}, Flags=${d.flags}")
+            }
+            
+            val presentationDisplays = dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
+            var targetDisplay: Display? = if (presentationDisplays.isNotEmpty()) presentationDisplays[0] else null
+            
+            if (targetDisplay == null && allDisplays.size > 1) {
+                targetDisplay = allDisplays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
+            }
+            
+            if (targetDisplay != null) {
+                Log.d(tag, "Secondary display selected: ${targetDisplay.name} (ID=${targetDisplay.displayId})")
+                try {
+                    presentation = KozenPresentation(context, targetDisplay)
+                    presentation?.show()
+                    uiManager.presentation = presentation
+                    Log.d(tag, "✅ KozenPresentation initialized and shown")
+                } catch (e: Exception) {
+                    Log.e(tag, "❌ Failed to initialize KozenPresentation: ${e.message}")
+                }
+            } else {
+                Log.w(tag, "⚠️ No secondary display found natively. We might need the SDK manager.")
+            }
+        }, 5000)
+    }
+
+    /**
+     * Ensures the Kozen SDK is initialized before any UI operation.
+     * LAZY: does NOT run at startup so the card reader hardware bus is free.
+     * The SDK will start only on the first Flutter showWelcome/showReadCard/etc. call.
+     */
+    private fun ensureSDKReady() {
+        if (ComponentEngine.secondaryScreenManager == null) {
+            Log.d(tag, "ensureSDKReady: SDK not yet initialized, starting now...")
+            initSDK()
+        }
+    }
 
     private fun initSDK() {
-        ComponentEngine.init(context) { result, errorMsg ->
-            when {
-                result == 0 -> Log.d(tag, "SDK initialized")
-                result == -10004 -> Log.w(tag, "SDK version mismatch, continuing anyway")
-                else -> Log.e(tag, "SDK init failed: $result - $errorMsg")
+        Log.d(tag, "Initializing Kozen Component SDK...")
+        try {
+            ComponentEngine.init(context) { code, errorMsg ->
+                when {
+                    code == 0 -> Log.d(tag, "✅ SDK initialized successfully")
+                    else -> Log.e(tag, "❌ SDK init failed: $code - $errorMsg")
+                }
             }
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to call ComponentEngine.init: ${e.message}")
         }
     }
 
     // ─── MethodCallHandler ────────────────────────────────────────────────────
 
     override fun onMethodCall(call: MethodCall, result: Result) {
-        // Ensure SDK manager is available
-        if (ComponentEngine.secondaryScreenManager == null) {
-            initSDK()
-        }
 
         when (call.method) {
             // ── Initialization & Config ──
             "initialize" -> {
                 applyThemeFromArgs(call)
+                ensureSDKReady()
                 result.success(true)
             }
 
             // ── Basic controls ──
             "getScreenResolution" -> {
-                val res = ComponentEngine.secondaryScreenManager?.screenResolution
+                val res = presentation?.getResolution()
                 if (res != null && res.size >= 2) {
                     result.success(mapOf("width" to res[0], "height" to res[1]))
                 } else {
@@ -108,50 +164,52 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
             "power" -> {
+                // Not supported via standard Presentation API easily, but we can dismiss/show
                 val on = call.argument<Boolean>("on") ?: true
-                val status = ComponentEngine.secondaryScreenManager?.power(on)
-                result.success(status == 0)
+                if (on) presentation?.show() else presentation?.dismiss()
+                result.success(true)
             }
             "setBrightness" -> {
-                val value = call.argument<Int>("value") ?: 50
-                val status = ComponentEngine.secondaryScreenManager?.setBrightness(value)
-                result.success(status == 0)
+                // Not supported via standard Presentation API
+                result.success(false)
             }
             "getBrightness" -> {
-                result.success(ComponentEngine.secondaryScreenManager?.brightness)
+                result.success(100)
             }
             "getPowerOnStatus" -> {
-                result.success(ComponentEngine.secondaryScreenManager?.powerOnStatus == 0)
+                result.success(presentation?.isShowing == true)
             }
 
             // ── UI Screens ──
             "showWallpaper" -> {
-                uiManager.showWallpaper(customWallpaperLogoPath) { success ->
+                ensureSDKReady()
+                uiManager.showWallpaper(customWallpaperLogoPath) { success: Boolean ->
                     result.success(success)
                 }
             }
             "showWelcome" -> {
-                uiManager.showWelcome { success -> result.success(success) }
+                ensureSDKReady()
+                uiManager.showWelcome { success: Boolean -> result.success(success) }
             }
             "showAmount" -> {
                 val amount = call.argument<String>("amount") ?: "0,00"
                 val title = call.argument<String>("title") ?: ""
                 val currency = call.argument<String>("currency") ?: ""
-                uiManager.showAmount(amount, title, currency) { success ->
+                uiManager.showAmount(amount, title, currency) { success: Boolean ->
                     result.success(success)
                 }
             }
             "showStatus" -> {
                 val title = call.argument<String>("title") ?: ""
                 val subtitle = call.argument<String>("subtitle") ?: ""
-                uiManager.showStatus(title, subtitle) { success ->
+                uiManager.showStatus(title, subtitle) { success: Boolean ->
                     result.success(success)
                 }
             }
 
             // ── Animated Screens ──
             "showReadCard" -> {
-                uiManager.showReadCard(customGifPath) { success ->
+                uiManager.showReadCard(customGifPath) { success: Boolean ->
                     result.success(success)
                 }
             }
@@ -160,7 +218,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                     bgColorTop = approvedColorTop,
                     bgColorBottom = approvedColorBottom,
                     label = approvedLabel
-                ) { success -> result.success(success) }
+                ) { success: Boolean -> result.success(success) }
             }
             "showRejected" -> {
                 val message = call.argument<String>("message") ?: ""
@@ -169,7 +227,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                     bgColorTop = rejectedColorTop,
                     bgColorBottom = rejectedColorBottom,
                     label = rejectedLabel
-                ) { success -> result.success(success) }
+                ) { success: Boolean -> result.success(success) }
             }
 
             else -> result.notImplemented()

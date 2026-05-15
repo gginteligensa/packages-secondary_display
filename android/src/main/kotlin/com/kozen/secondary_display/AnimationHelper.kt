@@ -19,7 +19,7 @@ import com.kozen.component_client.ComponentEngine
  * AnimationHelper — Single Responsibility: manages all animated content
  * for the secondary display (GIF frame playback, and Canvas-drawn result screens).
  */
-internal class AnimationHelper(private val context: Context) {
+class AnimationHelper(private val context: Context) {
 
     private val tag = "SD_AnimationHelper"
     private var gifAnimHandler: Handler? = null

@@ -17,14 +17,15 @@ import com.kozen.component_client.ComponentEngine
  * them to the SecondaryScreenManager. It does NOT handle animations —
  * that is delegated to [AnimationHelper].
  */
-internal class ScreenUIManager(private val context: Context) {
+class ScreenUIManager(private val context: Context) {
 
     private val tag = "SD_ScreenUIManager"
     private val animationHelper = AnimationHelper(context)
+    var presentation: KozenPresentation? = null
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
-    private fun manager(): ISecondaryScreen? = ComponentEngine.secondaryScreenManager
+    private fun manager(): ISecondaryScreen? = ComponentEngine.secondaryScreenManager ?: presentation?.let { null } // We prefer SDK manager
 
     private fun resolution(): Pair<Int, Int> {
         val res = manager()?.screenResolution
@@ -81,14 +82,12 @@ internal class ScreenUIManager(private val context: Context) {
             showView(view,
                 onSuccess = { Log.d(tag, "Wallpaper shown"); onDone(true) },
                 onFailure = { code, msg ->
-                    Log.w(tag, "Wallpaper failed ($code), falling back to SDK default")
-                    mgr.showWallpaper()
+                    Log.w(tag, "Wallpaper failed ($code)")
                     onDone(false)
                 }
             )
         } catch (e: Exception) {
             Log.e(tag, "Error inflating wallpaper: ${e.message}")
-            mgr.showWallpaper()
             onDone(false)
         }
     }

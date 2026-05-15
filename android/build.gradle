@@ -63,7 +63,7 @@ android {
 dependencies {
     // Kozen Component SDK (Secondary Display, Printer, etc.)
     // We use 'api' so the host app can also access the ComponentEngine.
-    api fileTree(dir: 'libs', include: ['*.aar', '*.jar'])
+    compileOnly fileTree(dir: 'libs', include: ['*.aar', '*.jar'])
     // Test dependencies
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
