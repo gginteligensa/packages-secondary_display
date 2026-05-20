@@ -41,6 +41,8 @@ class SecondaryDisplay {
   }
 
   /// Power on or off the secondary screen.
+  /// Uses the SDK manager's power() method when available (official QuickStart pattern).
+  /// Falls back to show()/dismiss() via the Presentation API.
   Future<bool> power(bool on) async {
     try {
       final bool? success = await _channel.invokeMethod('power', {'on': on});
@@ -52,6 +54,8 @@ class SecondaryDisplay {
   }
 
   /// Sets the screen brightness (0-100).
+  /// Uses the SDK manager when available (official QuickStart sets 100 after init).
+  /// Returns false when using Presentation API (not supported in that mode).
   Future<bool> setBrightness(int value) async {
     try {
       final bool? success = await _channel.invokeMethod('setBrightness', {'value': value});
@@ -63,12 +67,28 @@ class SecondaryDisplay {
   }
 
   /// Displays the default wallpaper (or custom if configured).
+  /// Alias: [showIdleScreen] for semantic clarity.
   Future<bool> showWallpaper() async {
     try {
       final bool? success = await _channel.invokeMethod('showWallpaper');
       return success ?? false;
     } on PlatformException catch (e) {
       print("Failed to show wallpaper: '\${e.message}'.");
+      return false;
+    }
+  }
+
+  /// Shows the idle/resting screen — equivalent to `second_default.xml` in the
+  /// official QuickStart SDK. Call this after a transaction completes or when
+  /// the terminal returns to idle state (e.g. after 30s timeout).
+  /// 
+  /// Official reference: TransInitActivity.java — idleTimer.onFinish() → showCover(true)
+  Future<bool> showIdleScreen() async {
+    try {
+      final bool? success = await _channel.invokeMethod('showIdleScreen');
+      return success ?? false;
+    } on PlatformException catch (e) {
+      print("Failed to show idle screen: '\${e.message}'.");
       return false;
     }
   }

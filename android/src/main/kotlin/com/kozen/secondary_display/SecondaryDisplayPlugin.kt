@@ -194,6 +194,14 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                     }
                     if (code == 0) {
                         Log.d(tag, "✅ SDK initialized successfully in ensureSDKReady.")
+                        // Official QuickStart pattern: set brightness to 100 after successful init
+                        // (TransInitActivity.java L544: ComponentEngine.INSTANCE.getSecondaryScreenManager().setBrightness(100))
+                        try {
+                            ComponentEngine.secondaryScreenManager?.setBrightness(100)
+                            Log.d(tag, "✅ setBrightness(100) applied after SDK init.")
+                        } catch (e: Exception) {
+                            Log.w(tag, "setBrightness(100) failed: ${e.message}")
+                        }
                     } else {
                         Log.e(tag, "❌ SDK init failed in ensureSDKReady: $code - $errorMsg.")
                     }
@@ -249,14 +257,41 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
             "power" -> {
-                // Not supported via standard Presentation API easily, but we can dismiss/show
+                // Official QuickStart pattern: SecondScreenUtils.powerControl()
+                // Uses SDK manager when available, falls back to Presentation show/dismiss
                 val on = call.argument<Boolean>("on") ?: true
-                if (on) presentation?.show() else presentation?.dismiss()
+                val mgr = ComponentEngine.secondaryScreenManager
+                if (mgr != null) {
+                    try {
+                        mgr.power(on)
+                        Log.d(tag, "power($on) via SDK manager")
+                    } catch (e: Exception) {
+                        Log.w(tag, "power() via SDK failed: ${e.message}, using Presentation fallback")
+                        if (on) presentation?.show() else presentation?.dismiss()
+                    }
+                } else {
+                    if (on) presentation?.show() else presentation?.dismiss()
+                }
                 result.success(true)
             }
             "setBrightness" -> {
-                // Not supported via standard Presentation API
-                result.success(false)
+                // Official QuickStart sets brightness via SDK manager
+                val value = call.argument<Int>("value") ?: 100
+                val mgr = ComponentEngine.secondaryScreenManager
+                if (mgr != null) {
+                    try {
+                        mgr.setBrightness(value)
+                        Log.d(tag, "setBrightness($value) via SDK manager")
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.w(tag, "setBrightness() via SDK failed: ${e.message}")
+                        result.success(false)
+                    }
+                } else {
+                    // Not supported via standard Presentation API
+                    Log.d(tag, "setBrightness() not supported without SDK manager")
+                    result.success(false)
+                }
             }
             "getBrightness" -> {
                 result.success(100)
@@ -324,6 +359,16 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                         bgColorBottom = rejectedColorBottom,
                         label = rejectedLabel
                     ) { success: Boolean -> result.success(success) }
+                }
+            }
+
+            // Official QuickStart equivalent to second_default.xml — idle/resting state
+            "showIdleScreen" -> {
+                ensureSDKReady {
+                    uiManager.showWallpaper(customWallpaperLogoPath) { success: Boolean ->
+                        Log.d(tag, "showIdleScreen (idle wallpaper) shown: $success")
+                        result.success(success)
+                    }
                 }
             }
 
