@@ -147,4 +147,25 @@ class SecondaryDisplay {
       return false;
     }
   }
+
+  /// Call BEFORE starting card reading.
+  /// Temporarily stops the Kozen SDK background polling that competes
+  /// with the card reader hardware bus (com.pos.service race condition).
+  Future<void> pauseForCardRead() async {
+    try {
+      await _channel.invokeMethod('pauseForCardRead');
+    } on PlatformException catch (e) {
+      print("pauseForCardRead failed: '${e.message}'.");
+    }
+  }
+
+  /// Call AFTER card reading completes (success OR failure).
+  /// Re-initializes the Kozen SDK so the secondary display works again.
+  Future<void> resumeAfterCardRead() async {
+    try {
+      await _channel.invokeMethod('resumeAfterCardRead');
+    } on PlatformException catch (e) {
+      print("resumeAfterCardRead failed: '${e.message}'.");
+    }
+  }
 }

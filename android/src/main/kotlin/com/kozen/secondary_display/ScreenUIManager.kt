@@ -25,9 +25,14 @@ class ScreenUIManager(private val context: Context) {
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
-    private fun manager(): ISecondaryScreen? = ComponentEngine.secondaryScreenManager ?: presentation?.let { null } // We prefer SDK manager
+    private fun manager(): ISecondaryScreen? = ComponentEngine.secondaryScreenManager
 
     private fun resolution(): Pair<Int, Int> {
+        val pres = presentation
+        if (pres != null) {
+            val res = pres.getResolution()
+            return Pair(res[0], res[1])
+        }
         val res = manager()?.screenResolution
         return Pair(
             if (res != null && res.size >= 1) res[0] else 378,
@@ -44,6 +49,20 @@ class ScreenUIManager(private val context: Context) {
     }
 
     private fun showView(view: View, onSuccess: () -> Unit, onFailure: (Int, String?) -> Unit) {
+        val pres = presentation
+        if (pres != null) {
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    pres.showView(view)
+                    onSuccess()
+                } catch (e: Exception) {
+                    Log.e(tag, "Native presentation showView failed: ${e.message}")
+                    onFailure(-2, e.message)
+                }
+            }
+            return
+        }
+
         val mgr = manager() ?: run {
             onFailure(-1, "Manager not initialized")
             return
@@ -63,7 +82,10 @@ class ScreenUIManager(private val context: Context) {
     /** Shows the custom branded wallpaper. On failure, falls back to the SDK default. */
     fun showWallpaper(logoPath: String? = null, onDone: (Boolean) -> Unit) {
         stopAnimations()
-        val mgr = manager() ?: run { onDone(false); return }
+        if (presentation == null && manager() == null) {
+            onDone(false)
+            return
+        }
         try {
             val inflater = LayoutInflater.from(context)
             val view = inflater.inflate(R.layout.secondary_wallpaper, null)
@@ -95,6 +117,10 @@ class ScreenUIManager(private val context: Context) {
     /** Shows the welcome screen. */
     fun showWelcome(onDone: (Boolean) -> Unit) {
         stopAnimations()
+        if (presentation == null && manager() == null) {
+            onDone(false)
+            return
+        }
         try {
             val view = LayoutInflater.from(context).inflate(R.layout.secondary_welcome, null)
             showView(view,
@@ -110,6 +136,10 @@ class ScreenUIManager(private val context: Context) {
     /** Shows an amount screen. */
     fun showAmount(amount: String, title: String, currency: String, onDone: (Boolean) -> Unit) {
         stopAnimations()
+        if (presentation == null && manager() == null) {
+            onDone(false)
+            return
+        }
         try {
             val view = LayoutInflater.from(context).inflate(R.layout.secondary_amount, null)
             view.findViewById<TextView>(R.id.amount_text).text = amount
@@ -136,6 +166,10 @@ class ScreenUIManager(private val context: Context) {
     /** Shows a status / instruction message screen. */
     fun showStatus(title: String, subtitle: String, onDone: (Boolean) -> Unit) {
         stopAnimations()
+        if (presentation == null && manager() == null) {
+            onDone(false)
+            return
+        }
         try {
             val view = LayoutInflater.from(context).inflate(R.layout.secondary_status, null)
             view.findViewById<TextView>(R.id.status_title).text = title
@@ -154,7 +188,8 @@ class ScreenUIManager(private val context: Context) {
 
     /** Plays the read-card GIF animation. */
     fun showReadCard(customGifPath: String? = null, onDone: (Boolean) -> Unit) {
-        val mgr = manager() ?: run { onDone(false); return }
+        val pres = presentation
+        val mgr = if (pres == null) (manager() ?: run { onDone(false); return }) else null
         val (w, h) = resolution()
 
         Handler(Looper.getMainLooper()).post {
@@ -170,6 +205,7 @@ class ScreenUIManager(private val context: Context) {
                     imageView = imageView,
                     view = view,
                     manager = mgr,
+                    presentation = pres,
                     onFirstFrameShown = { onDone(true) },
                     onFirstFrameError = { _, _ -> onDone(false) }
                 )
@@ -187,7 +223,8 @@ class ScreenUIManager(private val context: Context) {
         label: String = "APROBADO",
         onDone: (Boolean) -> Unit
     ) {
-        val mgr = manager() ?: run { onDone(false); return }
+        val pres = presentation
+        val mgr = if (pres == null) (manager() ?: run { onDone(false); return }) else null
         val (w, h) = resolution()
 
         Handler(Looper.getMainLooper()).post {
@@ -208,6 +245,7 @@ class ScreenUIManager(private val context: Context) {
                 imageView = imageView,
                 view = view,
                 manager = mgr,
+                presentation = pres,
                 onSuccess = { onDone(true) },
                 onFailure = { _, _ -> onDone(false) }
             )
@@ -222,7 +260,8 @@ class ScreenUIManager(private val context: Context) {
         label: String = "DENEGADO",
         onDone: (Boolean) -> Unit
     ) {
-        val mgr = manager() ?: run { onDone(false); return }
+        val pres = presentation
+        val mgr = if (pres == null) (manager() ?: run { onDone(false); return }) else null
         val (w, h) = resolution()
 
         Handler(Looper.getMainLooper()).post {
@@ -243,6 +282,7 @@ class ScreenUIManager(private val context: Context) {
                 imageView = imageView,
                 view = view,
                 manager = mgr,
+                presentation = pres,
                 onSuccess = { onDone(true) },
                 onFailure = { _, _ -> onDone(false) }
             )
