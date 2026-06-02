@@ -131,8 +131,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
         val mgr = ComponentEngine.secondaryScreenManager
-        val isAlive = (mgr as? android.os.IInterface)?.asBinder()?.isBinderAlive == true
-        if (mgr != null && isAlive) {
+        if (mgr != null) {
             onReady()
             return
         }
@@ -176,7 +175,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
             isInitializing = true
         }
 
-        Log.d(tag, "ensureSDKReady: SDK not yet initialized or dead (isAlive=$isAlive). Initializing now...")
+        Log.d(tag, "ensureSDKReady: SDK not yet initialized or dead. Initializing now...")
         
         // Schedule safety timeout
         handler.postDelayed(timeoutRunnable, 2500)
