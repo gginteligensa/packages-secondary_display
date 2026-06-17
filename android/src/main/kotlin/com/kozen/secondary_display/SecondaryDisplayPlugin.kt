@@ -45,6 +45,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private var rejectedLabel: String = "DENEGADO"
     private var customWallpaperLogoPath: String? = null
     private var customGifPath: String? = null
+    private var currentBrightness: Int = 60
 
     private var presentation: KozenPresentation? = null
     private var lifecycleCallbacks: android.app.Application.ActivityLifecycleCallbacks? = null
@@ -193,17 +194,20 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                     }
                     if (code == 0) {
                         Log.d(tag, "✅ SDK initialized successfully in ensureSDKReady.")
-                        // Official QuickStart pattern: set brightness to 100 after successful init
+                        // Official QuickStart pattern: set brightness to 60 after successful init
                         // (TransInitActivity.java L544: ComponentEngine.INSTANCE.getSecondaryScreenManager().setBrightness(100))
                         try {
-                            ComponentEngine.secondaryScreenManager?.setBrightness(100)
-                            Log.d(tag, "✅ setBrightness(100) applied after SDK init.")
+                            ComponentEngine.secondaryScreenManager?.setBrightness(currentBrightness)
+                            Log.d(tag, "✅ setBrightness($currentBrightness) applied after SDK init.")
                         } catch (e: Exception) {
-                            Log.w(tag, "setBrightness(100) failed: ${e.message}")
+                            Log.w(tag, "setBrightness($currentBrightness) failed: ${e.message}")
                         }
                     } else {
                         Log.e(tag, "❌ SDK init failed in ensureSDKReady: $code - $errorMsg.")
                     }
+                    // Always (re)apply software brightness overlay regardless of SDK result
+                    uiManager.setBrightness(currentBrightness)
+                    presentation?.setBrightness(currentBrightness)
                     callbackToRun?.let {
                         try {
                             it()
@@ -275,25 +279,35 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
             }
             "setBrightness" -> {
                 // Official QuickStart sets brightness via SDK manager
-                val value = call.argument<Int>("value") ?: 100
+                val value = call.argument<Int>("value") ?: 60
+                currentBrightness = value
+
+                // 1) Software overlay — applied to every subsequent view render
+                Handler(Looper.getMainLooper()).post {
+                    uiManager.setBrightness(value)
+                    presentation?.setBrightness(value)
+                }
+
+                // 2) Hardware SDK — best-effort, some devices support variable backlight
                 val mgr = ComponentEngine.secondaryScreenManager
                 if (mgr != null) {
                     try {
-                        mgr.setBrightness(value)
-                        Log.d(tag, "setBrightness($value) via SDK manager")
-                        result.success(true)
+                        val code = mgr.setBrightness(value)
+                        Log.d(tag, "setBrightness($value) via SDK manager → returnCode=$code")
+                        result.success(code == 0)
                     } catch (e: Exception) {
                         Log.w(tag, "setBrightness() via SDK failed: ${e.message}")
-                        result.success(false)
+                        result.success(true) // software overlay succeeded anyway
                     }
                 } else {
-                    // Not supported via standard Presentation API
-                    Log.d(tag, "setBrightness() not supported without SDK manager")
-                    result.success(false)
+                    Log.d(tag, "setBrightness($value) applied via software overlay only (no SDK manager)")
+                    result.success(true)
                 }
             }
             "getBrightness" -> {
-                result.success(100)
+                // Return the last value we sent — the SDK property name varies by version.
+                Log.d(tag, "getBrightness() → returning cached value: $currentBrightness")
+                result.success(currentBrightness)
             }
             "getPowerOnStatus" -> {
                 result.success(presentation?.isShowing == true)

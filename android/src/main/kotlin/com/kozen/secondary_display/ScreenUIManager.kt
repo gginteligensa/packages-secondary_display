@@ -1,11 +1,13 @@
 package com.kozen.secondary_display
 
 import android.content.Context
+import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import com.kozen.component.secondaryScreen.IResultCallback
@@ -16,12 +18,65 @@ import com.kozen.component_client.ComponentEngine
  * ScreenUIManager — Single Responsibility: inflates XML layouts and sends
  * them to the SecondaryScreenManager. It does NOT handle animations —
  * that is delegated to [AnimationHelper].
+ *
+ * Software brightness is simulated by wrapping every view with a semi-transparent
+ * black overlay before sending it to the SDK, so the effect works regardless of
+ * whether the hardware supports backlight control.
  */
 class ScreenUIManager(private val context: Context) {
 
     private val tag = "SD_ScreenUIManager"
     private val animationHelper = AnimationHelper(context)
     var presentation: KozenPresentation? = null
+
+    /** Current software brightness level 0–100. 100 = fully bright, 0 = fully dark. */
+    private var brightnessLevel: Int = 60
+
+    // ─── Software brightness ──────────────────────────────────────────────────
+
+    /**
+     * Updates the software brightness level. The next view shown will use this value.
+     * Also applies immediately to the Presentation overlay if one is active.
+     */
+    fun setBrightness(level: Int) {
+        brightnessLevel = level.coerceIn(0, 100)
+        presentation?.setBrightness(brightnessLevel)
+        Log.d(tag, "Software brightness updated to $brightnessLevel%")
+    }
+
+    /**
+     * Wraps [view] inside a FrameLayout with a black dimming overlay whose alpha
+     * reflects the current [brightnessLevel]. The outer FrameLayout is sized to
+     * exactly [w]×[h] so the SDK receives a correctly-sized bitmap.
+     *
+     * brightness=100 → overlay alpha 0.0 (transparent, full brightness)
+     * brightness=30  → overlay alpha 0.59 (visible dimming)
+     * brightness=0   → overlay alpha 0.85 (very dark, but not pitch-black)
+     */
+    private fun wrapWithBrightnessOverlay(view: View, w: Int, h: Int): View {
+        val overlayAlpha = ((100 - brightnessLevel) / 100f * 0.85f).coerceIn(0f, 0.85f)
+        if (overlayAlpha == 0f) return view  // full brightness — no wrapping needed
+
+        val wrapper = FrameLayout(context)
+        wrapper.layoutParams = FrameLayout.LayoutParams(w, h)
+
+        // Content
+        (view.parent as? FrameLayout)?.removeView(view)
+        view.layoutParams = FrameLayout.LayoutParams(w, h)
+        wrapper.addView(view)
+
+        // Dimming overlay on top
+        val overlay = View(context)
+        overlay.setBackgroundColor(Color.BLACK)
+        overlay.alpha = overlayAlpha
+        overlay.isClickable = false
+        overlay.isFocusable = false
+        overlay.layoutParams = FrameLayout.LayoutParams(w, h)
+        wrapper.addView(overlay)
+
+        Log.d(tag, "Brightness overlay applied: level=$brightnessLevel%, alpha=$overlayAlpha")
+        return wrapper
+    }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -53,7 +108,7 @@ class ScreenUIManager(private val context: Context) {
         if (pres != null) {
             Handler(Looper.getMainLooper()).post {
                 try {
-                    pres.showView(view)
+                    pres.showView(view)  // KozenPresentation applies its own overlay
                     onSuccess()
                 } catch (e: Exception) {
                     Log.e(tag, "Native presentation showView failed: ${e.message}")
@@ -69,7 +124,10 @@ class ScreenUIManager(private val context: Context) {
         }
         val (w, h) = resolution()
         measureAndLayout(view, w, h)
-        mgr.show(view, object : IResultCallback {
+        // Wrap with software brightness overlay before handing to the SDK
+        val displayView = wrapWithBrightnessOverlay(view, w, h)
+        measureAndLayout(displayView, w, h)
+        mgr.show(displayView, object : IResultCallback {
             override fun onSuccess() { onSuccess() }
             override fun onFailure(code: Int, msg: String?) { onFailure(code, msg) }
         })
