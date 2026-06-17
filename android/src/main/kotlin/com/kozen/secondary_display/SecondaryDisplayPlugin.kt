@@ -30,6 +30,12 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private lateinit var context: Context
     private lateinit var uiManager: ScreenUIManager
 
+    // ─── Queue for SDK Initialization ─────────────────────────────────────────
+    private var pendingCallback: (() -> Unit)? = null
+    private var isInitializing = false
+    private var lastInitAttemptTime = 0L
+    private val INIT_COOLDOWN_MS = 10000L // 10 seconds cooldown
+
     // ─── Theme defaults (overridable via initialize()) ────────────────────────
     private var approvedColorTop: Int = 0xFF00C853.toInt()
     private var approvedColorBottom: Int = 0xFF1B5E20.toInt()
@@ -39,6 +45,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private var rejectedLabel: String = "DENEGADO"
     private var customWallpaperLogoPath: String? = null
     private var customGifPath: String? = null
+    private var currentBrightness: Int = 60
 
     private var presentation: KozenPresentation? = null
     private var lifecycleCallbacks: android.app.Application.ActivityLifecycleCallbacks? = null
@@ -85,10 +92,9 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private fun setupPresentation() {
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         
-        // We will call this periodically or after SDK init
-        Handler(Looper.getMainLooper()).postDelayed({
+        Handler(Looper.getMainLooper()).post {
             val allDisplays = dm.displays
-            Log.d(tag, "--- Available Displays after delay (${allDisplays.size}) ---")
+            Log.d(tag, "--- Available Displays (${allDisplays.size}) ---")
             for (d in allDisplays) {
                 Log.d(tag, "Display: ID=${d.displayId}, Name=${d.name}, Flags=${d.flags}")
             }
@@ -113,32 +119,120 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
             } else {
                 Log.w(tag, "⚠️ No secondary display found natively. We might need the SDK manager.")
             }
-        }, 5000)
+        }
     }
 
     /**
      * Ensures the Kozen SDK is initialized before any UI operation.
-     * LAZY: does NOT run at startup so the card reader hardware bus is free.
-     * The SDK will start only on the first Flutter showWelcome/showReadCard/etc. call.
+     * Thread-safe and debounced to prevent concurrent initialization and display requests.
      */
-    private fun ensureSDKReady() {
-        if (ComponentEngine.secondaryScreenManager == null) {
-            Log.d(tag, "ensureSDKReady: SDK not yet initialized, starting now...")
-            initSDK()
+    private fun ensureSDKReady(onReady: () -> Unit) {
+        if (presentation != null) {
+            onReady()
+            return
         }
-    }
+        val mgr = ComponentEngine.secondaryScreenManager
+        if (mgr != null) {
+            onReady()
+            return
+        }
 
-    private fun initSDK() {
-        Log.d(tag, "Initializing Kozen Component SDK...")
+        val now = System.currentTimeMillis()
+        if (now - lastInitAttemptTime < INIT_COOLDOWN_MS) {
+            Log.d(tag, "ensureSDKReady: Skipping initialization due to cooldown. SDK is not connected.")
+            onReady()
+            return
+        }
+        lastInitAttemptTime = now
+
+        val handler = Handler(Looper.getMainLooper())
+        val timeoutRunnable = Runnable {
+             val callbackToRun = synchronized(this) {
+                if (isInitializing) {
+                    Log.w(tag, "⚠️ ensureSDKReady: SDK init timed out after 2.5 seconds. Resetting state.")
+                    isInitializing = false
+                    val cb = pendingCallback
+                    pendingCallback = null
+                    cb
+                } else {
+                    null
+                }
+            }
+            callbackToRun?.let {
+                try {
+                    it()
+                } catch (e: Exception) {
+                    Log.e(tag, "Error executing callback after timeout: ${e.message}")
+                }
+            }
+        }
+        
+        synchronized(this) {
+            pendingCallback = onReady
+            if (isInitializing) {
+                Log.d(tag, "ensureSDKReady: Already initializing. Overwrote pending callback.")
+                return
+            }
+            isInitializing = true
+        }
+
+        Log.d(tag, "ensureSDKReady: SDK not yet initialized or dead. Initializing now...")
+        
+        // Schedule safety timeout
+        handler.postDelayed(timeoutRunnable, 2500)
+
         try {
             ComponentEngine.init(context) { code, errorMsg ->
-                when {
-                    code == 0 -> Log.d(tag, "✅ SDK initialized successfully")
-                    else -> Log.e(tag, "❌ SDK init failed: $code - $errorMsg")
+                handler.removeCallbacks(timeoutRunnable)
+                Handler(Looper.getMainLooper()).post {
+                    val callbackToRun = synchronized(this) {
+                        if (!isInitializing) return@post
+                        isInitializing = false
+                        val cb = pendingCallback
+                        pendingCallback = null
+                        cb
+                    }
+                    if (code == 0) {
+                        Log.d(tag, "✅ SDK initialized successfully in ensureSDKReady.")
+                        // Official QuickStart pattern: set brightness to 60 after successful init
+                        // (TransInitActivity.java L544: ComponentEngine.INSTANCE.getSecondaryScreenManager().setBrightness(100))
+                        try {
+                            ComponentEngine.secondaryScreenManager?.setBrightness(currentBrightness)
+                            Log.d(tag, "✅ setBrightness($currentBrightness) applied after SDK init.")
+                        } catch (e: Exception) {
+                            Log.w(tag, "setBrightness($currentBrightness) failed: ${e.message}")
+                        }
+                    } else {
+                        Log.e(tag, "❌ SDK init failed in ensureSDKReady: $code - $errorMsg.")
+                    }
+                    // Always (re)apply software brightness overlay regardless of SDK result
+                    uiManager.setBrightness(currentBrightness)
+                    presentation?.setBrightness(currentBrightness)
+                    callbackToRun?.let {
+                        try {
+                            it()
+                        } catch (e: Exception) {
+                            Log.e(tag, "Error executing callback: ${e.message}")
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
-            Log.e(tag, "Failed to call ComponentEngine.init: ${e.message}")
+            handler.removeCallbacks(timeoutRunnable)
+            Log.e(tag, "Failed to call ComponentEngine.init in ensureSDKReady: ${e.message}")
+            val callbackToRun = synchronized(this) {
+                isInitializing = false
+                val cb = pendingCallback
+                pendingCallback = null
+                cb
+            }
+            callbackToRun?.let {
+                try {
+                    it()
+                } catch (e: Exception) {
+                    Log.e(tag, "Error executing callback: ${e.message}")
+                }
+            }
         }
     }
 
@@ -150,8 +244,10 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
             // ── Initialization & Config ──
             "initialize" -> {
                 applyThemeFromArgs(call)
-                ensureSDKReady()
-                result.success(true)
+                lastInitAttemptTime = 0L
+                ensureSDKReady {
+                    result.success(true)
+                }
             }
 
             // ── Basic controls ──
@@ -164,17 +260,54 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
             "power" -> {
-                // Not supported via standard Presentation API easily, but we can dismiss/show
+                // Official QuickStart pattern: SecondScreenUtils.powerControl()
+                // Uses SDK manager when available, falls back to Presentation show/dismiss
                 val on = call.argument<Boolean>("on") ?: true
-                if (on) presentation?.show() else presentation?.dismiss()
+                val mgr = ComponentEngine.secondaryScreenManager
+                if (mgr != null) {
+                    try {
+                        mgr.power(on)
+                        Log.d(tag, "power($on) via SDK manager")
+                    } catch (e: Exception) {
+                        Log.w(tag, "power() via SDK failed: ${e.message}, using Presentation fallback")
+                        if (on) presentation?.show() else presentation?.dismiss()
+                    }
+                } else {
+                    if (on) presentation?.show() else presentation?.dismiss()
+                }
                 result.success(true)
             }
             "setBrightness" -> {
-                // Not supported via standard Presentation API
-                result.success(false)
+                // Official QuickStart sets brightness via SDK manager
+                val value = call.argument<Int>("value") ?: 60
+                currentBrightness = value
+
+                // 1) Software overlay — applied to every subsequent view render
+                Handler(Looper.getMainLooper()).post {
+                    uiManager.setBrightness(value)
+                    presentation?.setBrightness(value)
+                }
+
+                // 2) Hardware SDK — best-effort, some devices support variable backlight
+                val mgr = ComponentEngine.secondaryScreenManager
+                if (mgr != null) {
+                    try {
+                        val code = mgr.setBrightness(value)
+                        Log.d(tag, "setBrightness($value) via SDK manager → returnCode=$code")
+                        result.success(code == 0)
+                    } catch (e: Exception) {
+                        Log.w(tag, "setBrightness() via SDK failed: ${e.message}")
+                        result.success(true) // software overlay succeeded anyway
+                    }
+                } else {
+                    Log.d(tag, "setBrightness($value) applied via software overlay only (no SDK manager)")
+                    result.success(true)
+                }
             }
             "getBrightness" -> {
-                result.success(100)
+                // Return the last value we sent — the SDK property name varies by version.
+                Log.d(tag, "getBrightness() → returning cached value: $currentBrightness")
+                result.success(currentBrightness)
             }
             "getPowerOnStatus" -> {
                 result.success(presentation?.isShowing == true)
@@ -182,52 +315,101 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
 
             // ── UI Screens ──
             "showWallpaper" -> {
-                ensureSDKReady()
-                uiManager.showWallpaper(customWallpaperLogoPath) { success: Boolean ->
-                    result.success(success)
+                ensureSDKReady {
+                    uiManager.showWallpaper(customWallpaperLogoPath) { success: Boolean ->
+                        result.success(success)
+                    }
                 }
             }
             "showWelcome" -> {
-                ensureSDKReady()
-                uiManager.showWelcome { success: Boolean -> result.success(success) }
+                ensureSDKReady {
+                    uiManager.showWelcome { success: Boolean -> result.success(success) }
+                }
             }
             "showAmount" -> {
                 val amount = call.argument<String>("amount") ?: "0,00"
                 val title = call.argument<String>("title") ?: ""
                 val currency = call.argument<String>("currency") ?: ""
-                uiManager.showAmount(amount, title, currency) { success: Boolean ->
-                    result.success(success)
+                ensureSDKReady {
+                    uiManager.showAmount(amount, title, currency) { success: Boolean ->
+                        result.success(success)
+                    }
                 }
             }
             "showStatus" -> {
                 val title = call.argument<String>("title") ?: ""
                 val subtitle = call.argument<String>("subtitle") ?: ""
-                uiManager.showStatus(title, subtitle) { success: Boolean ->
-                    result.success(success)
+                ensureSDKReady {
+                    uiManager.showStatus(title, subtitle) { success: Boolean ->
+                        result.success(success)
+                    }
                 }
             }
 
             // ── Animated Screens ──
             "showReadCard" -> {
-                uiManager.showReadCard(customGifPath) { success: Boolean ->
-                    result.success(success)
+                ensureSDKReady {
+                    uiManager.showReadCard(customGifPath) { success: Boolean ->
+                        result.success(success)
+                    }
                 }
             }
             "showApproved" -> {
-                uiManager.showApproved(
-                    bgColorTop = approvedColorTop,
-                    bgColorBottom = approvedColorBottom,
-                    label = approvedLabel
-                ) { success: Boolean -> result.success(success) }
+                ensureSDKReady {
+                    uiManager.showApproved(
+                        bgColorTop = approvedColorTop,
+                        bgColorBottom = approvedColorBottom,
+                        label = approvedLabel
+                    ) { success: Boolean -> result.success(success) }
+                }
             }
             "showRejected" -> {
                 val message = call.argument<String>("message") ?: ""
-                uiManager.showRejected(
-                    message = message,
-                    bgColorTop = rejectedColorTop,
-                    bgColorBottom = rejectedColorBottom,
-                    label = rejectedLabel
-                ) { success: Boolean -> result.success(success) }
+                ensureSDKReady {
+                    uiManager.showRejected(
+                        message = message,
+                        bgColorTop = rejectedColorTop,
+                        bgColorBottom = rejectedColorBottom,
+                        label = rejectedLabel
+                    ) { success: Boolean -> result.success(success) }
+                }
+            }
+
+            // Official QuickStart equivalent to second_default.xml — idle/resting state
+            "showIdleScreen" -> {
+                ensureSDKReady {
+                    uiManager.showWallpaper(customWallpaperLogoPath) { success: Boolean ->
+                        Log.d(tag, "showIdleScreen (idle wallpaper) shown: $success")
+                        result.success(success)
+                    }
+                }
+            }
+
+            "pauseForCardRead" -> {
+                Log.d("HW_BUS", "======================================")
+                Log.d("HW_BUS", ">>> PAUSE: pauseForCardRead called")
+                if (presentation != null) {
+                    Log.d("HW_BUS", "    Bypassing ComponentEngine.deInit() because native Presentation is active.")
+                } else {
+                    Log.d("HW_BUS", "    Calling ComponentEngine.deInit() to release hardware bus")
+                    try {
+                        ComponentEngine.deInit()
+                        Log.d("HW_BUS", ">>> PAUSE: ✅ deInit() OK — bus is FREE")
+                    } catch (e: Exception) {
+                        Log.e("HW_BUS", ">>> PAUSE: ❌ deInit() FAILED: ${e.message}")
+                    }
+                }
+                Log.d("HW_BUS", "======================================")
+                result.success(true)
+            }
+            "resumeAfterCardRead" -> {
+                Log.d("HW_BUS", "======================================")
+                Log.d("HW_BUS", "<<< RESUME: resumeAfterCardRead called")
+                ensureSDKReady {
+                    Log.d("HW_BUS", "<<< RESUME: ✅ SDK re-init / ready")
+                    Log.d("HW_BUS", "======================================")
+                    result.success(true)
+                }
             }
 
             else -> result.notImplemented()

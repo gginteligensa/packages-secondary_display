@@ -41,7 +41,8 @@ class AnimationHelper(private val context: Context) {
         heightPX: Int,
         imageView: ImageView,
         view: android.view.View,
-        manager: com.kozen.component.secondaryScreen.ISecondaryScreen,
+        manager: com.kozen.component.secondaryScreen.ISecondaryScreen?,
+        presentation: KozenPresentation?,
         onFirstFrameShown: () -> Unit,
         onFirstFrameError: (Int, String?) -> Unit
     ) {
@@ -58,14 +59,19 @@ class AnimationHelper(private val context: Context) {
         }
 
         val duration = movie.duration().coerceAtLeast(1)
-        val frameIntervalMs = 50L
         val startTime = System.currentTimeMillis()
         val widthSpec = android.view.View.MeasureSpec.makeMeasureSpec(widthPX, android.view.View.MeasureSpec.EXACTLY)
         val heightSpec = android.view.View.MeasureSpec.makeMeasureSpec(heightPX, android.view.View.MeasureSpec.EXACTLY)
 
+        val frameIntervalMs = if (presentation != null) 50L else 300L
         var firstFrame = true
         val handler = Handler(Looper.getMainLooper())
         gifAnimHandler = handler
+
+        // If native Presentation is available, attach the view once
+        if (presentation != null) {
+            presentation.showView(view)
+        }
 
         val runnable = object : Runnable {
             override fun run() {
@@ -83,24 +89,32 @@ class AnimationHelper(private val context: Context) {
                 view.measure(widthSpec, heightSpec)
                 view.layout(0, 0, widthPX, heightPX)
 
-                val callback = if (firstFrame) {
-                    firstFrame = false
-                    object : IResultCallback {
-                        override fun onSuccess() { onFirstFrameShown() }
-                        override fun onFailure(code: Int, msg: String?) {
-                            stopAnimation()
-                            onFirstFrameError(code, msg)
+                if (presentation != null) {
+                    if (firstFrame) {
+                        firstFrame = false
+                        onFirstFrameShown()
+                    }
+                } else if (manager != null) {
+                    val callback = if (firstFrame) {
+                        firstFrame = false
+                        object : IResultCallback {
+                            override fun onSuccess() { onFirstFrameShown() }
+                            override fun onFailure(code: Int, msg: String?) {
+                                stopAnimation()
+                                onFirstFrameError(code, msg)
+                            }
+                        }
+                    } else {
+                        object : IResultCallback {
+                            override fun onSuccess() {}
+                            override fun onFailure(code: Int, msg: String?) {
+                                Log.w(tag, "GIF frame failed: $code")
+                            }
                         }
                     }
-                } else {
-                    object : IResultCallback {
-                        override fun onSuccess() {}
-                        override fun onFailure(code: Int, msg: String?) {
-                            Log.w(tag, "GIF frame failed: $code")
-                        }
-                    }
+                    manager.show(view, callback)
                 }
-                manager.show(view, callback)
+                
                 handler.postDelayed(this, frameIntervalMs)
             }
         }
@@ -123,61 +137,82 @@ class AnimationHelper(private val context: Context) {
         heightPX: Int,
         imageView: ImageView,
         view: android.view.View,
-        manager: com.kozen.component.secondaryScreen.ISecondaryScreen,
+        manager: com.kozen.component.secondaryScreen.ISecondaryScreen?,
+        presentation: KozenPresentation?,
         onSuccess: () -> Unit,
         onFailure: (Int, String?) -> Unit
     ) {
         stopAnimation()
 
-        val totalFrames = 16
-        val holdFrames = 40
-        var frame = 0
-        var resultSent = false
-
         val widthSpec = android.view.View.MeasureSpec.makeMeasureSpec(widthPX, android.view.View.MeasureSpec.EXACTLY)
         val heightSpec = android.view.View.MeasureSpec.makeMeasureSpec(heightPX, android.view.View.MeasureSpec.EXACTLY)
 
         val handler = Handler(Looper.getMainLooper())
-        gifAnimHandler = handler
 
-        val runnable = object : Runnable {
-            override fun run() {
-                val progress = if (frame < totalFrames) {
-                    val t = frame.toFloat() / totalFrames
-                    1f - (1f - t) * (1f - t)
-                } else 1f
+        if (presentation != null) {
+            val totalFrames = 16
+            val holdFrames = 40
+            var frame = 0
+            var resultSent = false
+            gifAnimHandler = handler
+            presentation.showView(view)
 
-                val bmp = drawResultBitmap(
-                    widthPX, heightPX,
-                    bgColorTop, bgColorBottom,
-                    progress, iconColor,
-                    isApproved, labelText, subText
-                )
-                imageView.setImageBitmap(bmp)
-                view.measure(widthSpec, heightSpec)
-                view.layout(0, 0, widthPX, heightPX)
+            val runnable = object : Runnable {
+                override fun run() {
+                    val progress = if (frame < totalFrames) {
+                        val t = frame.toFloat() / totalFrames
+                        1f - (1f - t) * (1f - t)
+                    } else 1f
 
-                val isLast = frame >= totalFrames + holdFrames
-                manager.show(view, object : IResultCallback {
-                    override fun onSuccess() {
-                        if (!resultSent) { resultSent = true; onSuccess() }
+                    val bmp = drawResultBitmap(
+                        widthPX, heightPX,
+                        bgColorTop, bgColorBottom,
+                        progress, iconColor,
+                        isApproved, labelText, subText
+                    )
+                    imageView.setImageBitmap(bmp)
+                    view.measure(widthSpec, heightSpec)
+                    view.layout(0, 0, widthPX, heightPX)
+
+                    if (!resultSent) {
+                        resultSent = true
+                        onSuccess()
                     }
-                    override fun onFailure(code: Int, msg: String?) {
-                        if (!resultSent) { resultSent = true; onFailure(code, msg) }
-                    }
-                })
 
-                frame++
-                if (!isLast) {
-                    handler.postDelayed(this, 40L)
-                } else {
-                    gifAnimHandler = null
-                    gifAnimRunnable = null
+                    frame++
+                    val isLast = frame >= totalFrames + holdFrames
+                    if (!isLast) {
+                        handler.postDelayed(this, 40L)
+                    } else {
+                        gifAnimHandler = null
+                        gifAnimRunnable = null
+                    }
                 }
             }
+            gifAnimRunnable = runnable
+            handler.post(runnable)
+        } else if (manager != null) {
+            // Using Component SDK background service: render static final result screen immediately to avoid Binder flooding!
+            Log.d(tag, "playResultAnimation: Render static result layout directly via Component SDK manager")
+            val bmp = drawResultBitmap(
+                widthPX, heightPX,
+                bgColorTop, bgColorBottom,
+                1.0f, iconColor,
+                isApproved, labelText, subText
+            )
+            imageView.setImageBitmap(bmp)
+            view.measure(widthSpec, heightSpec)
+            view.layout(0, 0, widthPX, heightPX)
+            
+            manager.show(view, object : IResultCallback {
+                override fun onSuccess() {
+                    onSuccess()
+                }
+                override fun onFailure(code: Int, msg: String?) {
+                    onFailure(code, msg)
+                }
+            })
         }
-        gifAnimRunnable = runnable
-        handler.post(runnable)
     }
 
     // ─── Canvas drawing ──────────────────────────────────────────────────────

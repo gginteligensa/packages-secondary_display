@@ -1,6 +1,6 @@
 name: secondary_display
 description: "Plugin modular de Flutter para el control de la pantalla secundaria (customer-facing) en terminales POS Kozen. Soporta temas personalizados, animaciones y gestión de branding."
-version: 0.1.1
+version: 0.2.0
 repository: https://github.com/gginteligensa/packages-secondary_display
 homepage: https://github.com/gginteligensa/packages-secondary_display
 
