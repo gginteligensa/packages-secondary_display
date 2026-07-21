@@ -200,7 +200,16 @@ class ScreenUIManager(private val context: Context) {
         }
         try {
             val view = LayoutInflater.from(context).inflate(R.layout.secondary_amount, null)
-            view.findViewById<TextView>(R.id.amount_text).text = amount
+            val amountTv = view.findViewById<TextView>(R.id.amount_text)
+            amountTv.text = amount
+
+            // Dynamic font size: reduce as digits increase to prevent overflow
+            val fontSize = when {
+                amount.length >= 10 -> 28f
+                else                -> 38f  // default (matches XML)
+            }
+            amountTv.textSize = fontSize
+
             if (title.isNotEmpty()) {
                 view.findViewById<TextView>(R.id.amount_title).text = title.uppercase()
             }
@@ -315,7 +324,7 @@ class ScreenUIManager(private val context: Context) {
         message: String = "",
         bgColorTop: Int = 0xFFD32F2F.toInt(),
         bgColorBottom: Int = 0xFF7F0000.toInt(),
-        label: String = "DENEGADO",
+        label: String = "RECHAZADO",
         onDone: (Boolean) -> Unit
     ) {
         val pres = presentation

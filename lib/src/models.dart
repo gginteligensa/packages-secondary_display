@@ -31,7 +31,7 @@ class ScreenTheme {
   /// Bottom gradient color for the REJECTED screen. Hex format, e.g. "#7F0000".
   final String? rejectedColorBottomHex;
 
-  // ── Labels (defaults: "APROBADO" / "DENEGADO") ──
+  // ── Labels (defaults: "APROBADO" / "RECHAZADO") ──
   /// Text shown on the approved result screen.
   final String? approvedLabel;
 
