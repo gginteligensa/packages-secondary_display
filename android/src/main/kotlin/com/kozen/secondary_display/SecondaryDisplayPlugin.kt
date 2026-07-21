@@ -42,7 +42,7 @@ class SecondaryDisplayPlugin : FlutterPlugin, MethodCallHandler {
     private var rejectedColorTop: Int = 0xFFD32F2F.toInt()
     private var rejectedColorBottom: Int = 0xFF7F0000.toInt()
     private var approvedLabel: String = "APROBADO"
-    private var rejectedLabel: String = "DENEGADO"
+    private var rejectedLabel: String = "RECHAZADO"
     private var customWallpaperLogoPath: String? = null
     private var customGifPath: String? = null
     private var currentBrightness: Int = 60
